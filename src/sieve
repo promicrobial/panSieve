@@ -1,0 +1,647 @@
+#!/bin/bash
+
+#######################################
+#                                     #
+#             panSieve                #
+#                                     #
+#######################################
+
+##############################################################################
+# Author: Nathaniel Cole (nc564@cornell.edu)                                 #
+# Date: 26-11-24                                                             #
+# License: MIT                                                               #
+# Version: 1.1                                                               #
+#                                                                            #
+# Description: This tool processes a pangenome graph file (GFA or GFA.gz)    #
+# and extracts non-redundant sequences, including the reference and unique   #
+# variants.                                                                  #
+#                                                                            #
+# Dependencies:                                                              #
+#   - vg (https://github.com/vgteam/vg)                                      #
+#     Required for processing variation graphs                               #
+#   - seqkit (https://bioinf.shenwei.me/seqkit)                             #
+#     Required for sequence deduplication and statistics                     #
+#                                                                            #
+# Usage: sieve [options] -i <input.gfa[.gz]> -o <output_dir>                #
+#                                                                            #
+# Input:                                                                     #
+#   - GFA or GFA.gz file containing the pangenome graph                     #
+#                                                                            #
+# Output:                                                                    #
+#   - Deduplicated FASTA file with unique sequences                         #
+#   - Statistics file with sequence information                             #
+#   - Optional: Detailed graph statistics (if --stats is specified)         #
+#                                                                            #
+# Last updated: 10-04-25                                                     #
+##############################################################################
+
+# Enable strict error handling
+set -euo pipefail
+
+################################################################################
+# Global Variables and Settings                                                #
+################################################################################
+
+# Script information
+SCRIPT_NAME=$(basename "$0")
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VER="1.0.0"
+
+# Default settings
+INPUT=""
+OUTPUT_DIR="./output"
+OUTPUT_FILENAME="sieved-pangenome"
+THREADS=$(nproc 2>/dev/null || echo "16")  # Use nproc if available, else default to 16
+DECOMPRESS="cat"
+VERBOSE=false
+DEBUG=false
+KEEP_TEMP=false
+STATS=false
+DRY_RUN=false
+
+# Set temp directory
+TEMP_DIR=$(mktemp -d -p ./)
+export TEMP_DIR
+
+TOOLS=("vg" "seqkit")
+
+# Ensure bash-utils is available and source it
+UTILS_PATH="${SCRIPT_DIR}/../utils/bash-utils"
+if [ ! -f "$UTILS_PATH" ]; then
+    echo "Error: Required utility functions not found: $UTILS_PATH"
+    exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$UTILS_PATH"
+
+################################################################################
+# Usage and Help Functions                                                     #
+################################################################################
+
+help() {
+    cat << EOF
+Usage: ${SCRIPT_NAME} [options] -i <input.gfa[.gz]> -o <output_dir>
+
+Description:
+    Process a variant graph file (GFA or GFA.gz) and extract non-redundant sequences,
+    including the reference and unique variants.
+
+Required Arguments:
+    -i, --input FILE    Input GFA file (can be gzipped)
+    -o, --output DIR    Output directory (default: ./output)
+
+Optional Arguments:
+    -f, --outfile STR   Basename for output files (default: sieved-pangenome)
+    -t, --threads INT   Number of threads to use (default: all available)
+    -s, --stats        Generate detailed graph statistics
+    -v, --verbose      Enable verbose output (shows commands being executed)
+    -d, --debug        Enable debug output (shows detailed debugging information)
+    -k, --keep-temp    Keep temporary files
+    -l, --log FILE     Log output to specified file
+    --dry-run         Show commands without executing them
+
+Output Files:
+    <output_dir>/
+    ├── <outfile>.fa              # Original sequences
+    ├── <outfile>-dedup.fa        # Deduplicated sequences
+    ├── <outfile>.stats           # Sequence statistics
+    └── <outfile>-graph.stats     # Graph statistics (if --stats specified)
+
+Example:
+    ${SCRIPT_NAME} -i input.gfa -o results -f sample1 -t 8 --stats
+
+Version: $VER
+EOF
+}
+
+################################################################################
+# Validation Functions                                                         #
+################################################################################
+
+verify_input_files() {
+    [[ "$DEBUG" == "true" ]] && log_debug "Verifying input files"
+    
+    # Check if input file is specified
+    if [[ -z "${INPUT:-}" ]]; then
+        log_error "Input file not specified"
+        help
+        exit 1
+    fi
+
+    # Check if input file exists
+    if [[ ! -f "$INPUT" ]]; then
+        log_error "Input file not found: $INPUT"
+        exit 1
+    fi
+
+    # Check if input file is readable
+    if [[ ! -r "$INPUT" ]]; then
+        log_error "Input file is not readable: $INPUT"
+        exit 1
+    fi
+
+    # Verify file appears to be a GFA file
+    if [[ "$INPUT" != *.gfa && "$INPUT" != *.gfa.gz ]]; then
+        log_warn "Input file does not have .gfa or .gfa.gz extension: $INPUT"
+        read -p "Continue anyway? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
+
+    [[ "$DEBUG" == "true" ]] && log_debug "Input file verification complete"
+    return 0
+}
+
+verify_output_directory() {
+    local dir=$1
+    
+    [[ "$DEBUG" == "true" ]] && log_debug "Verifying output directory: $dir"
+    
+    # Create output directory if it doesn't exist
+    if [[ ! -d "$dir" ]]; then
+        log_info "Creating output directory: $dir"
+        if ! mkdir -p "$dir"; then
+            log_error "Failed to create output directory: $dir"
+            exit 1
+        fi
+    fi
+
+    # Check if directory is writable
+    if [[ ! -w "$dir" ]]; then
+        log_error "Output directory is not writable: $dir"
+        exit 1
+    fi
+
+    [[ "$DEBUG" == "true" ]] && log_debug "Output directory verification complete"
+    return 0
+}
+
+verify_dependencies() {
+    [[ "$DEBUG" == "true" ]] && log_debug "Checking dependencies"
+    
+    local missing_deps=0
+    
+    for tool in "${TOOLS[@]}"; do
+        if ! command -v "$tool" &> /dev/null; then
+            log_error "Required tool not found: $tool"
+            missing_deps=1
+        else
+            [[ "$DEBUG" == "true" ]] && log_debug "Found required tool: $tool"
+        fi
+    done
+
+    if [[ $missing_deps -eq 1 ]]; then
+        log_error "Please install missing dependencies and try again"
+        exit 1
+    fi
+
+    [[ "$VERBOSE" == "true" ]] && log_info "All dependencies satisfied"
+    return 0
+}
+
+################################################################################
+# Argument Parsing                                                            #
+################################################################################
+
+parse_arguments() {
+    [[ "$DEBUG" == "true" ]] && log_debug "Parsing command line arguments"
+    
+    # If no arguments provided, show help
+    if [[ $# -eq 0 ]]; then
+        log_error "Missing required arguments. Please refer to help:"
+        help
+        exit 0
+    fi
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                help
+                exit 0
+                ;;
+            -V|--version)
+                echo "$SCRIPT_NAME version $VER"
+                exit 0
+                ;;
+            -i|--input)
+                if [[ -z "$2" || "$2" =~ ^- ]]; then
+                    log_error "Missing value for parameter: $1"
+                    exit 1
+                fi
+                INPUT="$2"
+                shift 2
+                ;;
+            -o|--output)
+                if [[ -z "$2" || "$2" =~ ^- ]]; then
+                    log_error "Missing value for parameter: $1"
+                    exit 1
+                fi
+                OUTPUT_DIR="$2"
+                shift 2
+                ;;
+            -f|--outfile)
+                if [[ -z "$2" || "$2" =~ ^- ]]; then
+                    log_error "Missing value for parameter: $1"
+                    exit 1
+                fi
+                OUTPUT_FILENAME="$2"
+                shift 2
+                ;;
+            -t|--threads)
+                if [[ -z "$2" || "$2" =~ ^- ]]; then
+                    log_error "Missing value for parameter: $1"
+                    exit 1
+                fi
+                if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                    log_error "Thread count must be a positive integer"
+                    exit 1
+                fi
+                THREADS="$2"
+                shift 2
+                ;;
+            -s|--stats)
+                STATS=true
+                shift
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -d|--debug)
+                DEBUG=true
+                shift
+                ;;
+            -k|--keep-temp)
+                KEEP_TEMP=true
+                shift
+                ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                help
+                exit 1
+                ;;
+        esac
+    done
+
+    [[ "$DEBUG" == "true" ]] && log_debug "Argument parsing complete"
+    return 0
+}
+
+################################################################################
+# Core Processing Functions                                                    #
+################################################################################
+
+execute() {
+    # Log command if in debug or verbose mode
+    if [[ "$DEBUG" == "true" ]]; then
+        log_debug "Executing: $*"
+    elif [[ "$VERBOSE" == "true" ]]; then
+        log_info "Running: $*"
+    fi
+
+    # In dry-run mode, just print the command
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "Would execute: $*"
+        return 0
+    fi
+
+    # Execute the command
+    if ! "$@"; then
+        log_error "Command failed: $*"
+        return 1
+    fi
+
+    return 0
+}
+
+process_gfa_file() {
+    local input_file=$1
+    local output_dir=$2
+    
+    [[ "$DEBUG" == "true" ]] && log_debug "Starting GFA processing with:"
+    [[ "$DEBUG" == "true" ]] && log_debug "  Input: $input_file"
+    [[ "$DEBUG" == "true" ]] && log_debug "  Output: $output_dir"
+    [[ "$DEBUG" == "true" ]] && log_debug "  Temp dir: $TEMP_DIR"
+    
+    log_info "Processing GFA file: $input_file"
+    
+    # Set up cleanup trap
+    trap 'cleanup "$TEMP_DIR"' EXIT
+    
+    # Convert GFA to vg format
+    [[ "$DEBUG" == "true" ]] && log_debug "Converting GFA to vg format"
+    if ! execute "$DECOMPRESS" "$input_file" | execute vg convert --gfa-in - > "$output_dir/graph.vg"; then
+        log_error "Failed to convert GFA to vg format"
+        return 1
+    fi
+    log_info "GFA conversion complete"
+
+    # Index the graph
+    [[ "$DEBUG" == "true" ]] && log_debug "Starting graph indexing with $THREADS threads"
+    if ! execute vg index \
+        --xg-alts \
+        --verify-index \
+        --threads "$THREADS" \
+        --progress \
+        --temp-dir "$TEMP_DIR" \
+        -x "$output_dir/graph.xg" \
+        "$output_dir/graph.vg"; then
+        log_error "Failed to index the graph"
+        return 1
+    fi
+    log_info "Graph indexing complete"
+
+    return 0
+}
+
+extract_path_fasta() {
+    local output_dir=$1
+    local output_filename=$2
+    local output_path="$output_dir/$output_filename"
+    
+    log_info "Extracting paths from graph"
+
+    # Extract reference sequence
+    if ! execute vg paths -E -x "$output_dir/graph.xg" > "${output_path}-sequence-lengths.txt"; then
+        log_error "Failed to calculate path lengths"
+        return 1
+    fi
+
+    # Extract sequences to FASTA
+    if ! execute vg paths -x "$output_dir/graph.xg" -F > "${output_path}.fa"; then
+        log_error "Failed to extract paths to FASTA"
+        return 1
+    fi
+
+    # Verify output file was created and has content
+    if [[ ! -s "${output_path}.fa" ]]; then
+        log_error "Generated FASTA file is empty: ${output_path}.fa"
+        return 1
+    fi
+
+    log_info "Path extraction complete"
+    return 0
+}
+
+remove_duplicate_sequences() {
+    local input_file=$1
+    local output_prefix=$2
+    local output_dir
+    output_dir=$(dirname "$input_file")
+    
+    [[ "$DEBUG" == "true" ]] && log_debug "Starting sequence deduplication"
+    [[ "$DEBUG" == "true" ]] && log_debug "  Input: $input_file"
+    [[ "$DEBUG" == "true" ]] && log_debug "  Output prefix: $output_prefix"
+    
+    log_info "Removing redundant sequences from $(basename "$input_file")"
+
+    # Perform deduplication
+    [[ "$DEBUG" == "true" ]] && log_debug "Running sequence deduplication"
+    if ! execute seqkit rmdup \
+        --by-seq \
+        --threads "$THREADS" \
+        -o "${output_dir}/${output_prefix}-dedup.fa" \
+        "$input_file"; then
+        log_error "Failed to execute deduplication process"
+        return 1
+    fi
+
+    # Generate statistics for both original and deduplicated files
+    [[ "$DEBUG" == "true" ]] && log_debug "Generating sequence statistics"
+    if ! execute seqkit stats \
+        --threads "$THREADS" \
+        --all \
+        --basename \
+        --tabular \
+        "$input_file" \
+        "${output_dir}/${output_prefix}-dedup.fa" \
+        > "${output_dir}/${output_prefix}.stats"; then
+        log_error "Failed to calculate sequence statistics"
+        return 1
+    fi
+
+    # Log deduplication results
+    local orig_count
+    local dedup_count
+    orig_count=$(grep -c "^>" "$input_file" || echo "unknown")
+    dedup_count=$(grep -c "^>" "${output_dir}/${output_prefix}-dedup.fa" || echo "unknown")
+    
+    log_info "Deduplication complete:"
+    log_info "  Original sequences: $orig_count"
+    log_info "  Unique sequences: $dedup_count"
+    
+    return 0
+}
+
+generate_graph_stats() {
+    local output_dir=$1
+    local output_filename=$2
+    local output_path="$output_dir/$output_filename"
+    
+    [[ "$DEBUG" == "true" ]] && log_debug "Generating graph statistics"
+    [[ "$DEBUG" == "true" ]] && log_debug "  Output: ${output_path}-graph.stats"
+
+    if ! execute vg stats \
+        --size \
+        --node-count \
+        --edge-count \
+        --length \
+        --self-loops \
+        --subgraphs \
+        --overlap-all \
+        --snarls \
+        --degree-dist \
+        --verbose \
+        --threads "$THREADS" \
+        "$output_dir/graph.xg" \
+        > "${output_path}-graph.stats"; then
+        log_error "Failed to generate graph statistics"
+        return 1
+    fi
+
+    # Verify statistics file was created and has content
+    if [[ ! -s "${output_path}-graph.stats" ]]; then
+        log_error "Generated statistics file is empty: ${output_path}-graph.stats"
+        return 1
+    fi
+
+    log_info "Graph statistics generation complete"
+    return 0
+}
+
+################################################################################
+# Utility Functions                                                           #
+################################################################################
+
+cleanup() {
+    local target=$1
+    
+    [[ "$DEBUG" == "true" ]] && log_debug "Cleanup called for: $target"
+    
+    # Skip cleanup if keep temp files is enabled
+    if [[ "$KEEP_TEMP" == "true" ]]; then
+        [[ "$DEBUG" == "true" ]] && log_debug "Keeping temporary files as requested: $target"
+        return 0
+    fi
+
+    # Check if target exists
+    if [[ ! -e "$target" ]]; then
+        [[ "$DEBUG" == "true" ]] && log_debug "No temporary files to clean up at: $target"
+        return 0
+    fi
+
+    log_info "Cleaning up temporary files: $target"
+    if ! rm -rf "$target"; then
+        log_warn "Failed to remove temporary files: $target"
+        return 1
+    fi
+
+    return 0
+}
+
+create_directory() {
+    local dir=$1
+    
+    [[ "$DEBUG" == "true" ]] && log_debug "Creating directory: $dir"
+    
+    if [[ ! -d "$dir" ]]; then
+        if ! mkdir -p "$dir"; then
+            log_error "Failed to create directory: $dir"
+            return 1
+        fi
+    else
+        [[ "$DEBUG" == "true" ]] && log_debug "Directory already exists: $dir"
+    fi
+    
+    return 0
+}
+
+################################################################################
+# Main Execution                                                              #
+################################################################################
+
+main() {
+    local start_time
+    start_time=$(date +%s)
+
+    [[ "$DEBUG" == "true" ]] && log_debug "Starting $SCRIPT_NAME v$VER with debug enabled"
+    [[ "$DRY_RUN" == "true" ]] && log_info "DRY RUN MODE: No actions will be performed"
+    
+    # Parse command line arguments
+    parse_arguments "$@"
+    
+    # Initial setup and validation
+    [[ "$DEBUG" == "true" ]] && log_debug "Performing initial setup and validation"
+    
+    # Verify dependencies
+    verify_dependencies
+    
+    # Validate input files
+    verify_input_files
+    
+    # Validate and create output directory
+    verify_output_directory "$OUTPUT_DIR"
+    
+    # Determine if input is gzipped
+    if [[ "$INPUT" == *.gz ]]; then
+        DECOMPRESS="gunzip -c"
+        [[ "$DEBUG" == "true" ]] && log_debug "Input is gzipped, using gunzip for decompression"
+    else
+        DECOMPRESS="cat"
+        [[ "$DEBUG" == "true" ]] && log_debug "Input is not compressed, using cat"
+    fi
+
+    # Setup lockfile to prevent parallel execution
+    local lock_file="${OUTPUT_DIR}/.lock"
+    if [[ -f "$lock_file" ]]; then
+        local pid
+        pid=$(cat "$lock_file")
+        if kill -0 "$pid" 2>/dev/null; then
+            log_error "Another instance is running (PID: $pid)"
+            exit 1
+        else
+            log_warn "Removing stale lock file"
+            rm -f "$lock_file"
+        fi
+    fi
+    echo $$ > "$lock_file"
+    
+    # Ensure lock file is removed on script exit
+    trap 'rm -f "$lock_file"' EXIT
+
+    # Process the GFA file
+    log_info "Starting graph processing pipeline"
+    
+    if ! process_gfa_file "$INPUT" "$OUTPUT_DIR"; then
+        log_error "Failed to process GFA file"
+        exit 1
+    fi
+
+    # Extract FASTA sequences
+    if ! extract_path_fasta "$OUTPUT_DIR" "$OUTPUT_FILENAME"; then
+        log_error "Failed to extract paths"
+        exit 1
+    fi
+
+    # Remove duplicate sequences
+    if ! remove_duplicate_sequences "${OUTPUT_DIR}/${OUTPUT_FILENAME}.fa" "$OUTPUT_FILENAME"; then
+        log_error "Failed to remove duplicate sequences"
+        exit 1
+    fi
+
+    # Generate graph statistics if requested
+    if [[ "$STATS" == "true" ]]; then
+        if ! generate_graph_stats "$OUTPUT_DIR" "$OUTPUT_FILENAME"; then
+            log_error "Failed to generate graph statistics"
+            exit 1
+        fi
+    fi
+
+    # Clean up intermediate files unless keep_temp is true
+    if [[ "$KEEP_TEMP" == "false" ]]; then
+        log_info "Cleaning up intermediate files"
+        cleanup "${OUTPUT_DIR}/tmp"
+        cleanup "${OUTPUT_DIR}/graph.vg"
+    else
+        log_info "Keeping intermediate files as requested"
+    fi
+
+    # Calculate and display execution time
+    local end_time
+    end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+
+    # Print summary
+    log_info "Processing completed successfully"
+    log_info "Summary:"
+    log_info "  Input file: $INPUT"
+    log_info "  Output directory: $OUTPUT_DIR"
+    log_info "  Output files:"
+    log_info "    - ${OUTPUT_FILENAME}.fa"
+    log_info "    - ${OUTPUT_FILENAME}-dedup.fa"
+    log_info "    - ${OUTPUT_FILENAME}.stats"
+    [[ "$STATS" == "true" ]] && log_info "    - ${OUTPUT_FILENAME}-graph.stats"
+    log_info "  Execution time: $(format_duration "$duration")"
+
+    return 0
+}
+
+################################################################################
+# Script Initialization                                                       #
+################################################################################
+
+# Execute main function only if script is being run directly (not sourced)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Trap errors and print the line number where they occurred
+    trap 'log_error "Error on line $LINENO" >&2; exit 1' ERR
+    
+    # Execute main function with all arguments
+    main "$@"
+fi
