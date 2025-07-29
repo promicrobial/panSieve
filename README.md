@@ -83,6 +83,3 @@ MIT
 
 If you use panSieve in your research, please cite:
 [Citation Information]
-
-## Repository Structure
-
