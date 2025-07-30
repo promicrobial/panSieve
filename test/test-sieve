@@ -114,57 +114,57 @@ EOF
 ################################################################################
 
 test_script_exists() {
-    assert "script exists" "[[ -f ${SCRIPT_DIR}/src/sieve ]]"
+    assert "script exists" "[[ -f ${SCRIPT_DIR}/sieve ]]"
 }
 
 test_script_executable() {
-    assert "script is executable" "[[ -x ${SCRIPT_DIR}/src/sieve ]]"
+    assert "script is executable" "[[ -x ${SCRIPT_DIR}/sieve ]]"
 }
 
 test_help_output() {
-    assert "help output contains usage" "${SCRIPT_DIR}/src/sieve --help | grep -q 'Usage:'"
+    assert "help output contains usage" "${SCRIPT_DIR}/sieve --help | grep -q 'Usage:'"
 }
 
 test_version_output() {
-    assert "version output" "${SCRIPT_DIR}/src/sieve --version | grep -q 'version'"
+    assert "version output" "${SCRIPT_DIR}/sieve --version | grep -q 'version'"
 }
 
 test_input_validation() {
     # Test missing input file
-    assert "detects missing input" "! ${SCRIPT_DIR}/src/sieve -i nonexistent.gfa 2>/dev/null"
+    assert "detects missing input" "! ${SCRIPT_DIR}/sieve -i nonexistent.gfa 2>/dev/null"
     
     # Test empty input file
-    assert "detects empty input" "! ${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/empty.gfa 2>/dev/null"
+    assert "detects empty input" "! ${SCRIPT_DIR}/sieve -i ${DATA_DIR}/empty.gfa 2>/dev/null"
     
     # Test invalid input file
-    assert "detects invalid input" "! ${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/invalid.gfa 2>/dev/null"
+    assert "detects invalid input" "! ${SCRIPT_DIR}/sieve -i ${DATA_DIR}/invalid.gfa 2>/dev/null"
 }
 
 test_dry_run() {
-    assert "dry run mode works" "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa --dry-run | grep -q 'Would execute'"
+    assert "dry run mode works" "${SCRIPT_DIR}/sieve -i ${DATA_DIR}/small.gfa --dry-run | grep -q 'Would execute'"
 }
 
 test_output_creation() {
     # Test with valid input
     rm -rf "${TEMP_DIR}/output"
-    assert "creates output directory" "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output"
+    assert "creates output directory" "${SCRIPT_DIR}/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output"
     assert "output directory exists" "[[ -d ${TEMP_DIR}/output ]]"
     assert "generates FASTA output" "[[ -f ${TEMP_DIR}/output/sieved-pangenome.fa ]]"
 }
 
 test_gzipped_input() {
-    assert "handles gzipped input" "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa.gz -o ${TEMP_DIR}/output_gz"
+    assert "handles gzipped input" "${SCRIPT_DIR}/sieve -i ${DATA_DIR}/small.gfa.gz -o ${TEMP_DIR}/output_gz"
 }
 
 test_stats_generation() {
     rm -rf "${TEMP_DIR}/output_stats"
-    assert "generates statistics" "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output_stats --stats"
+    assert "generates statistics" "${SCRIPT_DIR}/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output_stats --stats"
     assert "statistics file exists" "[[ -f ${TEMP_DIR}/output_stats/sieved-pangenome.stats ]]"
 }
 
 test_keep_temp_files() {
     rm -rf "${TEMP_DIR}/output_temp"
-    assert "keeps temporary files" "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output_temp --keep-temp"
+    assert "keeps temporary files" "${SCRIPT_DIR}/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output_temp --keep-temp"
     assert "temporary directory exists" "[[ -d ${TEMP_DIR}/output_temp/tmp ]]"
 }
 
