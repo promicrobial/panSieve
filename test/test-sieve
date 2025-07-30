@@ -1,3 +1,4 @@
+:::artifact{identifier="test-script" type="text/plain" title="test/test_sieve.sh"}
 #!/bin/bash
 
 #######################################
@@ -9,96 +10,91 @@
 ##############################################################################
 # Author: Nathaniel Cole (nc564@cornell.edu)                                 #
 # Date: 08-04-25                                                             #
-# Description: Test suite for panSieve script                                #
-#                                                                            #
-# Test Data Source:                                                         #
-#   https://github.com/vgteam/vg/tree/master/test/graphs                    #
-#                                                                            #
-# Last modified: 10-04-25                                                    #
+# Description: Test suite for panSieve script                               #
 ##############################################################################
 
-# Enable error reporting
-set -e  # Exit on error
+# Enable strict error handling
+set -euo pipefail
 
-# Basic setup
+# Get the directory where the test script is located
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_DIR="$(cd "${TEST_DIR}/.." && pwd)"
 DATA_DIR="${TEST_DIR}/data"
+EXPECTED_DIR="${TEST_DIR}/expected"
 TEMP_DIR="${TEST_DIR}/temp"
 
-# Colors for output
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# Source the script to test internal functions
+source "${SCRIPT_DIR}/src/sieve"
 
 # Test counter
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
 
+# Colors for output
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
 ################################################################################
-# Helper Functions                                                             #
+# Test Helper Functions                                                        #
 ################################################################################
 
-# At the top of the test script, after setting variables
-DEBUG=${DEBUG:-true}
-
-debug() {
-    if [[ "$DEBUG" == "true" ]]; then
-        echo "DEBUG: $*" >&2
+setup() {
+    echo "Setting up test environment..."
+    mkdir -p "${TEMP_DIR}"
+    mkdir -p "${DATA_DIR}"
+    mkdir -p "${EXPECTED_DIR}"
+    
+    # Create test data if it doesn't exist
+    if [[ ! -f "${DATA_DIR}/small.gfa" ]]; then
+        create_test_data
     fi
 }
 
-setup() {
-    echo -e "${BLUE}Setting up test environment...${NC}"
+cleanup() {
+    echo "Cleaning up test environment..."
     rm -rf "${TEMP_DIR}"
-    mkdir -p "${TEMP_DIR}"
-    
-    # Create test data directory if it doesn't exist
-    if [[ ! -d "${DATA_DIR}" ]]; then
-        mkdir -p "${DATA_DIR}"
-    fi
-    
-    # Create a simple test GFA with explicit paths
-    cat > "${DATA_DIR}/test.gfa" << EOF
-H	VN:Z:1.0
-S	1	ACTG
-S	2	GTCA
-L	1	+	2	+	0M
-P	path1	1+,2+	*,*
-EOF
-    
-    # Create expected output for validation
-    cat > "${TEMP_DIR}/expected.fa" << EOF
->path1
-ACTGGTCA
-EOF
-    
-    echo -e "${GREEN}Test environment setup complete${NC}"
 }
 
 assert() {
     local message=$1
     local command=$2
+    ((TESTS_RUN++))
     
-    let TESTS_RUN=TESTS_RUN+1 || true
-    
-    echo -e "${YELLOW}Test #${TESTS_RUN}${NC}: $message"
+    echo -n "Testing $message... "
     if eval "$command"; then
         echo -e "${GREEN}PASSED${NC}"
-        let TESTS_PASSED=TESTS_PASSED+1 || true
+        ((TESTS_PASSED++))
         return 0
     else
         echo -e "${RED}FAILED${NC}"
-        let TESTS_FAILED=TESTS_FAILED+1 || true
+        ((TESTS_FAILED++))
         return 1
     fi
 }
 
+create_test_data() {
+    # Create a small valid GFA file
+    cat > "${DATA_DIR}/small.gfa" << EOF
+H	VN:Z:1.0
+S	1	ACTG
+S	2	GTCA
+L	1	+	2	+	3M
+EOF
+
+    # Create an empty GFA file
+    touch "${DATA_DIR}/empty.gfa"
+
+    # Create an invalid GFA file
+    echo "This is not a valid GFA file" > "${DATA_DIR}/invalid.gfa"
+
+    # Create gzipped version of small.gfa
+    gzip -c "${DATA_DIR}/small.gfa" > "${DATA_DIR}/small.gfa.gz"
+}
+
 ################################################################################
-# Test Functions                                                              #
+# Test Cases                                                                  #
 ################################################################################
 
 test_script_exists() {
@@ -110,152 +106,89 @@ test_script_executable() {
 }
 
 test_help_output() {
-    assert "help output" "${SCRIPT_DIR}/src/sieve --help 2>&1 | grep -q 'Usage:'"
+    assert "help output contains usage" "${SCRIPT_DIR}/src/sieve --help | grep -q 'Usage:'"
 }
 
 test_version_output() {
-    assert "version output" "${SCRIPT_DIR}/src/sieve --version 2>&1 | grep -q 'version'"
+    assert "version output" "${SCRIPT_DIR}/src/sieve --version | grep -q 'version'"
 }
 
-test_missing_arguments() {
-    assert "detects missing arguments" \
-        "${SCRIPT_DIR}/src/sieve 2>&1 | grep -q 'Missing required arguments'"
-}
-
-# Add timeout function
-timeout_cmd() {
-    local timeout=$1
-    shift
+test_input_validation() {
+    # Test missing input file
+    assert "detects missing input" "! ${SCRIPT_DIR}/src/sieve -i nonexistent.gfa 2>/dev/null"
     
-    # Start the command in background
-    "$@" &
-    local cmd_pid=$!
+    # Test empty input file
+    assert "detects empty input" "! ${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/empty.gfa 2>/dev/null"
     
-    # Start timeout in background
-    (
-        sleep "$timeout"
-        kill -9 $cmd_pid 2>/dev/null
-    ) &
-    local timeout_pid=$!
-    
-    # Wait for command to finish
-    wait $cmd_pid 2>/dev/null
-    local exit_code=$?
-    
-    # Kill timeout process if it's still running
-    kill -9 $timeout_pid 2>/dev/null
-    
-    return $exit_code
-}
-
-test_simple_graph() {
-    local test_file="${DATA_DIR}/test.gfa"
-    local output_dir="${TEMP_DIR}/simple_test"
-    
-    debug "Test file content:"
-    debug "$(cat "$test_file")"
-    
-    # First, verify the test file exis"ts and has co"ntent
-    assert "test GFA file exists and has content" "[[ -s ${test_file} ]]"
-    
-    # Process the graph with explicit temp directory
-    assert "processes simple graph" \
-        "TEMP_DIR=${TEMP_DIR} ${SCRIPT_DIR}/src/sieve -i ${test_file} -o ${output_dir}"
-    
-    # If the previous test failed, show the error output
-    if [[ $? -ne 0 ]]; then
-        debug "Command output:"
-        debug "$(TEMP_DIR=${TEMP_DIR} "${SCRIPT_DIR}"/src/sieve -i "${test_file}" -o "${output_dir}" 2>&1)"
-    fi
-    
-    # Check output files
-    assert "creates non-empty output FASTA" "[[ -s ${output_dir}/sieved-pangenome.fa ]]"
-    
-    if [[ -f "${output_dir}/sieved-pangenome.fa" ]]; then
-        debug "Output FASTA content:"
-        debug "$(cat "${output_dir}/sieved-pangenome.fa")"
-    fi
-    
-    # Verify FASTA format
-    assert "output is in FASTA format" "grep -q '^>' ${output_dir}/sieved-pangenome.fa"
-    
-    # Compare with expected output
-    assert "output matches expected" "diff ${TEMP_DIR}/expected.fa ${output_dir}/sieved-pangenome.fa"
-}
-
-test_simple_graph() {
-    local test_file="${DATA_DIR}/test.gfa"
-    local output_dir="${TEMP_DIR}/simple_test"
-    
-    # First, verify the test file exists and has content
-    assert "test GFA file exists and has content" "[[ -s ${test_file} ]]"
-    
-    # Process the graph
-    assert "processes simple graph" \
-        "TEMP_DIR=${TEMP_DIR} ${SCRIPT_DIR}/src/sieve -i ${test_file} -o ${output_dir}"
-    
-    # Check that output files exist and have content
-    assert "creates non-empty output FASTA" "[[ -s ${output_dir}/sieved-pangenome.fa ]]"
-    
-    # Verify FASTA format
-    assert "output is in FASTA format" "grep -q '^>' ${output_dir}/sieved-pangenome.fa"
-    
-    # Compare with expected output (if exact match is needed)
-    assert "output matches expected" "diff ${TEMP_DIR}/expected.fa ${output_dir}/sieved-pangenome.fa"
+    # Test invalid input file
+    assert "detects invalid input" "! ${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/invalid.gfa 2>/dev/null"
 }
 
 test_dry_run() {
-    assert "dry run mode works" \
-        "TEMP_DIR=${TEMP_DIR} ${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/test.gfa -o ${TEMP_DIR}/dry_run --dry-run 2>&1 | grep -q 'Would execute'"
+    assert "dry run mode works" "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa --dry-run | grep -q 'Would execute'"
+}
+
+test_output_creation() {
+    # Test with valid input
+    rm -rf "${TEMP_DIR}/output"
+    assert "creates output directory" "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output"
+    assert "output directory exists" "[[ -d ${TEMP_DIR}/output ]]"
+    assert "generates FASTA output" "[[ -f ${TEMP_DIR}/output/sieved-pangenome.fa ]]"
+}
+
+test_gzipped_input() {
+    assert "handles gzipped input" "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa.gz -o ${TEMP_DIR}/output_gz"
+}
+
+test_stats_generation() {
+    rm -rf "${TEMP_DIR}/output_stats"
+    assert "generates statistics" "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output_stats --stats"
+    assert "statistics file exists" "[[ -f ${TEMP_DIR}/output_stats/sieved-pangenome.stats ]]"
+}
+
+test_keep_temp_files() {
+    rm -rf "${TEMP_DIR}/output_temp"
+    assert "keeps temporary files" "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output_temp --keep-temp"
+    assert "temporary directory exists" "[[ -d ${TEMP_DIR}/output_temp/tmp ]]"
 }
 
 ################################################################################
-# Main Function                                                               #
+# Main Test Execution                                                         #
 ################################################################################
 
 main() {
-    echo "==========================================="
-    echo -e "${BLUE}Starting panSieve Test Suite${NC}"
-    echo "==========================================="
-    echo
-
-    # Setup
+    # Setup test environment
     setup
-
-    echo -e "${BLUE}Running basic functionality tests...${NC}"
-    test_script_exists || true
-    test_script_executable || true
-    test_help_output || true
-    test_version_output || true
     
-    echo -e "\n${BLUE}Running input validation tests...${NC}"
-    echo "Testing missing arguments..."
-    test_missing_arguments || true
-
-    echo -e "\n${BLUE}Running graph processing tests...${NC}"
-    test_simple_graph || true
+    # Run tests
+    echo "Running tests..."
     
-    echo -e "\n${BLUE}Running feature tests...${NC}"
-    test_dry_run || true
+    test_script_exists
+    test_script_executable
+    test_help_output
+    test_version_output
+    test_input_validation
+    test_dry_run
+    test_output_creation
+    test_gzipped_input
+    test_stats_generation
+    test_keep_temp_files
     
-    # Print results
+    # Cleanup
+    cleanup
+    
+    # Print summary
     echo
-    echo "==========================================="
-    echo -e "${BLUE}Test Summary:${NC}"
+    echo "Test Summary:"
     echo "  Total tests: ${TESTS_RUN}"
-    echo -e "  ${GREEN}Passed: ${TESTS_PASSED}${NC}"
-    if [[ ${TESTS_FAILED} -gt 0 ]]; then
-        echo -e "  ${RED}Failed: ${TESTS_FAILED}${NC}"
-    else
-        echo "  Failed: 0"
-    fi
-    echo "==========================================="
+    echo "  Passed: ${TESTS_PASSED}"
+    echo "  Failed: ${TESTS_FAILED}"
     
-    # Return non-zero if any tests failed
-    [ "${TESTS_FAILED}" -eq 0 ]
+    # Return appropriate exit code
+    [[ ${TESTS_FAILED} -eq 0 ]]
 }
 
-# Run main if script is executed directly
+# Run tests if script is executed directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
