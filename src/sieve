@@ -58,6 +58,7 @@ DEBUG=false
 KEEP_TEMP=false
 STATS=false
 DRY_RUN=false
+TEMP_DIR="$(mktemp -d -p ./)"
 
 # Required tools and their minimum versions (if needed in future)
 TOOLS=("vg" "seqkit" "gunzip")
@@ -148,6 +149,21 @@ verify_input_files() {
         fi
     fi
 
+    # Handle compressed files
+    if [[ "$INPUT" == *.gz ]]; then
+        # Test if file is a valid gzip file
+        if ! gunzip -t "$INPUT" 2>/dev/null; then
+            log_error "Invalid gzip file: $INPUT"
+            return 1
+        fi
+        
+        DECOMPRESS=(gunzip -c)
+        [[ "$DEBUG" == "true" ]] && log_debug "Input is gzipped, using gunzip for decompression"
+    else
+        DECOMPRESS=(cat)
+        [[ "$DEBUG" == "true" ]] && log_debug "Input is not compressed, using cat"
+    fi
+
     [[ "$DEBUG" == "true" ]] && log_debug "Input file verification complete"
     return 0
 }
@@ -208,6 +224,7 @@ parse_arguments() {
     
     # If no arguments provided, show help
     if [[ $# -eq 0 ]]; then
+        echo "Missing required arguments"
         help
         exit 0
     fi
@@ -320,20 +337,19 @@ execute() {
 process_gfa_file() {
     local input_file=$1
     local output_dir=$2
-    local temp_dir="$output_dir/tmp"
-    
+
     [[ "$DEBUG" == "true" ]] && log_debug "Starting GFA processing with:"
     [[ "$DEBUG" == "true" ]] && log_debug "  Input: $input_file"
     [[ "$DEBUG" == "true" ]] && log_debug "  Output: $output_dir"
-    [[ "$DEBUG" == "true" ]] && log_debug "  Temp dir: $temp_dir"
-    
+    [[ "$DEBUG" == "true" ]] && log_debug "  Temp dir: $TEMP_DIR"
+
     log_info "Processing GFA file: $input_file"
     
     # Create temporary directory
-    create_directory "$temp_dir"
+    create_directory "$TEMP_DIR"
     
     # Set up cleanup trap
-    trap 'cleanup "$temp_dir"' EXIT
+    trap 'cleanup "$TEMP_DIR"' EXIT
     
     # Convert GFA to vg format
     [[ "$DEBUG" == "true" ]] && log_debug "Converting GFA to vg format"
@@ -350,7 +366,7 @@ process_gfa_file() {
         --verify-index \
         --threads "$THREADS" \
         --progress \
-        --temp-dir "$temp_dir" \
+        --temp-dir "$TEMP_DIR" \
         -x "$output_dir/graph.xg" \
         "$output_dir/graph.vg"; then
         log_error "Failed to index the graph"
@@ -489,9 +505,9 @@ cleanup() {
     
     [[ "$DEBUG" == "true" ]] && log_debug "Cleanup called for: $target"
     
-    # Skip cleanup if keep temp files is enabled
+    # Skip cleanup for temp directory if keep-temp is enabled
     if [[ "$KEEP_TEMP" == "true" ]]; then
-        [[ "$DEBUG" == "true" ]] && log_debug "Keeping temporary files as requested: $target"
+        [[ "$DEBUG" == "true" ]] && log_debug "Keeping temporary directory: $target"
         return 0
     fi
 
@@ -553,15 +569,6 @@ main() {
     # Validate and create output directory
     verify_output_directory "$OUTPUT_DIR"
     
-    # Determine if input is gzipped
-    if [[ "$INPUT" == *.gz ]]; then
-        DECOMPRESS="gunzip -c"
-        [[ "$DEBUG" == "true" ]] && log_debug "Input is gzipped, using gunzip for decompression"
-    else
-        DECOMPRESS="cat"
-        [[ "$DEBUG" == "true" ]] && log_debug "Input is not compressed, using cat"
-    fi
-
     # Setup lockfile to prevent parallel execution
     local lock_file="${OUTPUT_DIR}/.lock"
     if [[ -f "$lock_file" ]]; then
