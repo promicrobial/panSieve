@@ -53,7 +53,7 @@ setup() {
 
 cleanup() {
     echo "Cleaning up test environment..."
-    rm -rf "${TEMP_DIR}"
+    rm -rfv "${TEMP_DIR}"
 }
 
 assert() {
@@ -91,12 +91,12 @@ run_test() {
 }
 
 create_test_data() {
-    # Create a small valid GFA file
+    # Create a small valid GFA file (blunt-ended format)
     cat > "${DATA_DIR}/small.gfa" << EOF
 H	VN:Z:1.0
 S	1	ACTG
 S	2	GTCA
-L	1	+	2	+	3M
+L	1	+	2	+	0M
 EOF
 
     # Create an empty GFA file
@@ -141,8 +141,8 @@ test_input_validation() {
 }
 
 test_missing_arguments() {
-    # Test that script requires input argument
-    assert "detects missing arguments" "${SCRIPT_DIR}/src/sieve 2>&1 | grep -q 'Input file not specified'"
+    assert "detects missing arguments" \
+        "${SCRIPT_DIR}/src/sieve 2>&1 | grep -q 'Missing required arguments'"
 }
 
 test_dry_run() {
@@ -171,6 +171,16 @@ test_keep_temp_files() {
     rm -rf "${TEMP_DIR}/output_temp"
     assert "keeps temporary files" "${SCRIPT_DIR}/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output_temp --keep-temp"
     assert "temporary directory exists" "[[ -d ${TEMP_DIR}/output_temp/tmp ]]"
+}
+
+test_verbose_output() {
+    assert "verbose mode provides additional output" \
+        "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output_verbose -v --dry-run 2>&1 | grep -q 'INFO:'"
+}
+
+test_debug_output() {
+    assert "debug mode provides detailed output" \
+        "${SCRIPT_DIR}/src/sieve -i ${DATA_DIR}/small.gfa -o ${TEMP_DIR}/output_debug -d --dry-run 2>&1 | grep -q 'DEBUG:'"
 }
 
 ################################################################################

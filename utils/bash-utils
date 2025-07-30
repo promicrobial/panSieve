@@ -40,7 +40,9 @@ fi
 : "${THREADS:=16}"
 : "${COMPRESS_LEVEL:=5}"
 : "${LOG_FILE:=}"
-: "${TMP:=TMP=$(mktemp -d -p ./)}"
+: "${TEMP_DIR:=TEMP_DIR=$(mktemp -d -p ./)}"
+
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
 # Color codes for output
 RED='\033[0;31m'

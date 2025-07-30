@@ -60,7 +60,7 @@ STATS=false
 DRY_RUN=false
 
 # Required tools and their minimum versions (if needed in future)
-TOOLS=("vg" "seqkit")
+TOOLS=("vg" "seqkit" "gunzip")
 
 # Ensure bash-utils is available and source it
 UTILS_PATH="${SCRIPT_DIR}/../utils/bash-utils"
