@@ -140,6 +140,11 @@ test_input_validation() {
     assert "detects invalid input" "! ${SCRIPT_DIR}/sieve -i ${DATA_DIR}/invalid.gfa 2>/dev/null"
 }
 
+test_missing_arguments() {
+    # Test that script requires input argument
+    assert "detects missing arguments" "${SCRIPT_DIR}/src/sieve 2>&1 | grep -q 'Input file not specified'"
+}
+
 test_dry_run() {
     assert "dry run mode works" "${SCRIPT_DIR}/sieve -i ${DATA_DIR}/small.gfa --dry-run | grep -q 'Would execute'"
 }
