@@ -216,7 +216,7 @@ test_compressed_input() {
     fi
     
     assert "handles compressed input" \
-        "${SCRIPT_DIR}/sieve -i ${test_output}/compressed.gfa.gz -o ${test_output}/compressed_out"
+        "${SCRIPT_DIR}/sieve -d -i ${test_output}/compressed.gfa.gz -o ${test_output}/compressed_out"
 }
 
 test_output_creation() {

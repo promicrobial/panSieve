@@ -19,20 +19,20 @@
 # Dependencies:                                                              #
 #   - vg (https://github.com/vgteam/vg)                                      #
 #     Required for processing variation graphs                               #
-#   - seqkit (https://bioinf.shenwei.me/seqkit)                             #
+#   - seqkit (https://bioinf.shenwei.me/seqkit)                              #
 #     Required for sequence deduplication and statistics                     #
 #                                                                            #
-# Usage: sieve [options] -i <input.gfa[.gz]> -o <output_dir>                #
+# Usage: sieve [options] -i <input.gfa[.gz]> -o <output_dir>                 #
 #                                                                            #
 # Input:                                                                     #
-#   - GFA or GFA.gz file containing the pangenome graph                     #
+#   - GFA or GFA.gz file containing the pangenome graph                      #
 #                                                                            #
 # Output:                                                                    #
-#   - Deduplicated FASTA file with unique sequences                         #
-#   - Statistics file with sequence information                             #
-#   - Optional: Detailed graph statistics (if --stats is specified)         #
+#   - Deduplicated FASTA file with unique sequences                          #
+#   - Statistics file with sequence information                              #
+#   - Optional: Detailed graph statistics (if --stats is specified)          #
 #                                                                            #
-# Last updated: 08-04-25                                                     #
+# Last updated: 11-11-25                                                     #
 ##############################################################################
 
 # Enable strict error handling
@@ -52,7 +52,6 @@ INPUT=""
 OUTPUT_DIR="./output"
 OUTPUT_FILENAME="sieved-pangenome"
 THREADS=$(nproc 2>/dev/null || echo "16")  # Use nproc if available, else default to 16
-DECOMPRESS="cat"
 VERBOSE=false
 DEBUG=false
 KEEP_TEMP=false
@@ -157,11 +156,7 @@ verify_input_files() {
             return 1
         fi
         
-        DECOMPRESS=(gunzip -c)
-        [[ "$DEBUG" == "true" ]] && log_debug "Input is gzipped, using gunzip for decompression"
-    else
-        DECOMPRESS=(cat)
-        [[ "$DEBUG" == "true" ]] && log_debug "Input is not compressed, using cat"
+        [[ "$DEBUG" == "true" ]] && log_debug "Input is gzipped, gunzip will be used for decompression"
     fi
 
     [[ "$DEBUG" == "true" ]] && log_debug "Input file verification complete"
@@ -351,8 +346,17 @@ process_gfa_file() {
     # Set up cleanup trap
     trap 'cleanup "$TEMP_DIR"' EXIT
     
+    if [[ "$input_file" == *.gz ]]; then
+
+        DECOMPRESS=zcat
+        
+        [[ "$DEBUG" == "true" ]] && log_debug "Input is gzipped, gunzip will be used for decompression"
+    else
+        DECOMPRESS=cat
+    fi
+
     # Convert GFA to vg format
-    [[ "$DEBUG" == "true" ]] && log_debug "Converting GFA to vg format"
+    [[ "$DEBUG" == "true" ]] && log_debug "Converting GFA to vg format using $DECOMPRESS"
     if ! execute "$DECOMPRESS" "$input_file" | execute vg convert --gfa-in - > "$output_dir/graph.vg"; then
         log_error "Failed to convert GFA to vg format"
         return 1
