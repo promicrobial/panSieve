@@ -1,4 +1,4 @@
-# panSieve 
+# panSieve
 
 panSieve is a tool for extracting unique sequences from pangenome graphs. It processes GFA (Graphical Fragment Assembly) files and extracts non-redundant sequences, including references and unique variants.
 
@@ -25,7 +25,7 @@ You can set up a conda environment using the `environment.yml` file
 
 ```bash
 conda env create -n pansieve --file environment.yml
-conda activate panSieve
+conda activate pansieve
 ```
 
 ## Installation
@@ -43,7 +43,7 @@ chmod +x src/sieve
 
 ## Arguments
 
-```
+```txt
 <input.gfa[.gz]>: Input GFA file (can be gzipped)
 <config_file>: Configuration file containing paths and settings
 ```
@@ -52,8 +52,7 @@ chmod +x src/sieve
 
 The configuration file should contain the following variables:
 
-`OUTPUT_DIR`        /path/to/output/directory
-`OUTPUT_FILENAME`   output.fasta OR output.fastq
+`OUTPUT_DIR` /path/to/output/directory `OUTPUT_FILENAME` output.fasta OR output.fastq
 
 ## Example
 
@@ -72,14 +71,14 @@ The tool generates a non-redundant set of sequences in either FASTA or FASTQ for
 
 Intermediate files are automatically cleaned up after processing
 
-
 ## Documentation
+
 Full documentation is available in the [docs](docs/) directory.
 
 ## License
+
 MIT
 
 ## Citation
 
-If you use panSieve in your research, please cite:
-[Citation Information]
+If you use panSieve in your research, please cite: [Citation Information]
