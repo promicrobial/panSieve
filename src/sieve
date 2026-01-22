@@ -36,6 +36,9 @@
 ##############################################################################
 
 # Enable strict error handling
+# -e: Exit immediately if a command exits with non-zero status
+# -u: Treat unset variables as an error
+# -o pipefail: Return value of a pipeline is the status of the last command to exit with a non-zero status
 set -euo pipefail
 
 ################################################################################
@@ -558,11 +561,11 @@ main() {
     [[ "$DEBUG" == "true" ]] && log_debug "Starting $SCRIPT_NAME v$VER with debug enabled"
     [[ "$DRY_RUN" == "true" ]] && log_info "DRY RUN MODE: No actions will be performed"
     
-    # Parse command line arguments
-    parse_arguments "$@"
-    
     # Initial setup and validation
     [[ "$DEBUG" == "true" ]] && log_debug "Performing initial setup and validation"
+
+    # Parse command line arguments
+    parse_arguments "$@"
     
     # Verify dependencies
     verify_dependencies
