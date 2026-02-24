@@ -15,11 +15,8 @@ panSieve is a tool for extracting unique sequences from pangenome graphs. It pro
 
 The following tools must be installed and available in your PATH:
 
-- vg (Variation Graph Tool)
-- bcftools
-- seqtk
-- tabix
-- bgzip
+- [vg](https://github.com/vgteam/vg) (Variation Graph Tool) v1.61.0
+- [seqkit](https://github.com/shenwei356/seqkit) v2.10.0
 
 You can set up a conda environment using the `environment.yml` file
 
