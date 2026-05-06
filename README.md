@@ -129,7 +129,7 @@ If you use panSieve in your research, please cite:
   title        = {panSieve: A tool for extracting unique sequences from pangenome graphs},
   year         = {2024},
   publisher    = {GitHub},
-  url          = {https://github.com/yourusername/panSieve}
+  url          = {https://github.com/cpnh/panSieve}
 }
 ```
 ## Acknowledgments
